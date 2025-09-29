@@ -27,11 +27,9 @@ public class RealScanService extends ScanService {
             long deviceSize = 0;
 
             // Sous Windows, channel.size() ne fonctionne pas sur les PHYSICALDRIVE
-            // On utilise la taille fournie par le BlockDevice
             try {
                 deviceSize = channel.size();
             } catch (IOException e) {
-                // Windows PHYSICALDRIVE - utiliser la taille du BlockDevice
                 deviceSize = device.getSize();
                 notifyProgress(3, "Note: Utilisation de la taille déclarée du périphérique");
             }
@@ -41,24 +39,23 @@ public class RealScanService extends ScanService {
             }
 
             if (deviceSize == 0) {
-                throw new IOException("Impossible de déterminer la taille du périphérique. " +
-                        "Vérifiez que vous avez les droits administrateur.");
+                throw new IOException("Impossible de déterminer la taille du périphérique");
             }
 
-            notifyProgress(5, "✓ Accès direct réussi - Taille: " + formatSize(deviceSize));
-            notifyProgress(6, "🔍 Recherche de signatures de fichiers...");
-            notifyProgress(7, "📏 Détection de taille RÉELLE activée");
+            notifyProgress(5, "✓ Accès direct réussi - Taille totale: " + formatSize(deviceSize));
+
+            // Augmenter la limite de scan ou scanner tout le disque
+            long maxScan = Math.min(deviceSize, 10L * 1024 * 1024 * 1024); // 10GB au lieu de 500MB
+            notifyProgress(6, "Zone de scan: " + formatSize(maxScan));
+            notifyProgress(7, "🔍 Recherche de signatures de fichiers...");
 
             ByteBuffer buffer = ByteBuffer.allocate(1024 * 1024); // 1MB buffer
             long position = 0;
-            long maxScan = Math.min(deviceSize, 500 * 1024 * 1024); // Scan jusqu'à 500MB
+            int sectorsScanned = 0;
 
             notifyProgress(10, "Début du scan RAW réel...");
 
-            // Index des positions déjà utilisées
-            Set<Long> usedPositions = new HashSet<>();
-
-            while (position < deviceSize && position < maxScan) {
+            while (position < maxScan) {
                 try {
                     channel.position(position);
                     buffer.clear();
@@ -70,8 +67,8 @@ public class RealScanService extends ScanService {
                     byte[] data = new byte[bytesRead];
                     buffer.get(data);
 
-                    // Rechercher les signatures avec TAILLE RÉELLE
-                    List<FileInfo> foundFiles = findFilesWithSize(data, position, channel, usedPositions);
+                    // Rechercher les signatures (VERSION SIMPLIFIÉE)
+                    List<FileInfo> foundFiles = findFilesSimple(data, position);
 
                     for (FileInfo fileInfo : foundFiles) {
                         RecoveredFile file = new RecoveredFile(
@@ -86,34 +83,64 @@ public class RealScanService extends ScanService {
                         files.add(file);
                         notifyFileFound(file);
                         notifyProgress(10 + (int)((position * 80) / maxScan),
-                                String.format("✓ Trouvé: %s - Taille réelle: %s",
-                                        fileInfo.type, formatSize(fileInfo.size)));
-
-                        // Marquer la plage comme utilisée
-                        usedPositions.add(fileInfo.offset);
+                                String.format("✓ %s trouvé @ %s", fileInfo.type, formatSize(position)));
                     }
 
                     position += bytesRead;
+                    sectorsScanned++;
 
-                    int progress = 10 + (int)((position * 80) / maxScan);
-                    if (progress % 10 == 0) { // Log tous les 10%
-                        notifyProgress(progress, String.format("Scanné: %s / %s - %d fichiers trouvés (TAILLE RÉELLE)",
+                    // Log tous les 100 secteurs (100MB)
+                    if (sectorsScanned % 100 == 0) {
+                        int progress = 10 + (int)((position * 80) / maxScan);
+                        notifyProgress(progress, String.format("Scanné: %s / %s - %d fichiers",
                                 formatSize(position), formatSize(maxScan), files.size()));
                     }
                 } catch (IOException e) {
-                    // Si erreur de lecture à cette position, continuer
-                    notifyProgress(10 + (int)((position * 80) / maxScan),
-                            "Avertissement: Secteur illisible à " + formatSize(position));
-                    position += 1024 * 1024; // Sauter 1MB
+                    // Secteur illisible, continuer
+                    position += 1024 * 1024;
                 }
             }
 
-            notifyProgress(100, "✓ Scan RÉEL terminé - Toutes les tailles sont réelles");
+            notifyProgress(100, "✓ Scan terminé");
             notifyComplete(files.size());
         } catch (IOException e) {
-            notifyError("✗ Erreur accès direct: " + e.getMessage());
-            notifyError("Conseil: Vérifiez les permissions (sudo/admin) et que le disque est démonté");
+            notifyError("✗ Erreur: " + e.getMessage());
             throw e;
+        }
+
+        return files;
+    }
+
+    /**
+     * Version simplifiée qui trouve juste les signatures (pas de calcul de taille complexe)
+     */
+    private List<FileInfo> findFilesSimple(byte[] data, long baseOffset) {
+        List<FileInfo> files = new ArrayList<>();
+
+        Map<String, FileSignatureInfo> signatures = getSignatures();
+
+        for (int offset = 0; offset < data.length - 8; offset++) {
+            for (Map.Entry<String, FileSignatureInfo> entry : signatures.entrySet()) {
+                String type = entry.getKey();
+                FileSignatureInfo sigInfo = entry.getValue();
+
+                if (matchesSignature(data, offset, sigInfo.startSignature)) {
+                    long globalOffset = baseOffset + offset;
+
+                    // Utiliser une taille estimée simple
+                    long estimatedSize = sigInfo.avgSize;
+
+                    String fileName = String.format("%s_recovered_%08X.%s",
+                            type.toLowerCase(),
+                            (int)(globalOffset & 0xFFFFFFFF),
+                            sigInfo.extension);
+
+                    files.add(new FileInfo(fileName, globalOffset, estimatedSize, type));
+
+                    // Éviter de trouver le même fichier plusieurs fois
+                    offset += sigInfo.startSignature.length;
+                }
+            }
         }
 
         return files;
