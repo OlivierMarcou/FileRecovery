@@ -57,7 +57,21 @@ public class WindowsDeviceService {
 
                     if (!deviceId.isEmpty() && deviceId.startsWith("\\\\.\\PHYSICALDRIVE")) {
                         try {
-                            long size = sizeStr.isEmpty() ? 0 : Long.parseLong(sizeStr);
+                            long size = 0;
+
+                            // Parser la taille (WMIC retourne en bytes)
+                            if (!sizeStr.isEmpty()) {
+                                try {
+                                    size = Long.parseLong(sizeStr);
+                                } catch (NumberFormatException e) {
+                                    // Si erreur, essayer de nettoyer la chaîne
+                                    sizeStr = sizeStr.replaceAll("[^0-9]", "");
+                                    if (!sizeStr.isEmpty()) {
+                                        size = Long.parseLong(sizeStr);
+                                    }
+                                }
+                            }
+
                             String diskNum = deviceId.replace("\\\\.\\PHYSICALDRIVE", "");
                             String name = String.format("Disque %s - %s (%s)",
                                     diskNum,
@@ -66,18 +80,30 @@ public class WindowsDeviceService {
 
                             BlockDevice device = new BlockDevice(deviceId, name, size, false, model, interfaceType);
                             devices.add(device);
+
+                            System.out.println("DEBUG: Disque détecté: " + deviceId + " - Taille: " + size + " bytes (" + formatSize(size) + ")");
                         } catch (NumberFormatException e) {
-                            // Ignorer ce périphérique
+                            System.err.println("Erreur parsing taille pour " + deviceId + ": " + sizeStr);
                         }
                     }
                 }
             }
             process.waitFor();
         } catch (Exception e) {
-            // WMIC a échoué, on essaie les autres méthodes
+            System.err.println("Erreur WMIC: " + e.getMessage());
         }
 
         return devices;
+    }
+
+    private String formatSize(long bytes) {
+        if (bytes < 1024L * 1024 * 1024) {
+            return String.format("%.0f MB", bytes / (1024.0 * 1024));
+        }
+        if (bytes < 1024L * 1024 * 1024 * 1024) {
+            return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
+        }
+        return String.format("%.2f TB", bytes / (1024.0 * 1024 * 1024 * 1024));
     }
 
     private List<BlockDevice> detectMountedVolumes() {

@@ -64,6 +64,7 @@ public class RealRecoveryService {
 
     /**
      * Récupère un fichier unique depuis le disque
+     * LIT VRAIMENT LES DONNÉES du disque secteur par secteur
      */
     private boolean recoverSingleFile(RecoveredFile file, String sourcePath, String destinationPath)
             throws IOException {
@@ -73,19 +74,26 @@ public class RealRecoveryService {
         // Créer les dossiers si nécessaire
         outputFile.getParentFile().mkdirs();
 
-        // Ouvrir le périphérique source en lecture
+        // Ouvrir le périphérique source en lecture RAW
         try (RandomAccessFile sourceRaf = new RandomAccessFile(sourcePath, "r");
              FileChannel sourceChannel = sourceRaf.getChannel();
              FileOutputStream fos = new FileOutputStream(outputFile);
              FileChannel outputChannel = fos.getChannel()) {
 
-            // Se positionner à l'offset du fichier
+            // Se positionner EXACTEMENT à l'offset du fichier sur le disque
             sourceChannel.position(file.getOffset());
 
-            // Lire et écrire les données
+            // Lire VRAIMENT les données secteur par secteur
             long bytesToRead = file.getSize();
             long bytesRead = 0;
             ByteBuffer buffer = ByteBuffer.allocate(64 * 1024); // 64KB buffer
+
+            System.out.println(String.format("=== RÉCUPÉRATION RÉELLE ==="));
+            System.out.println(String.format("Fichier: %s", file.getName()));
+            System.out.println(String.format("Source: %s", sourcePath));
+            System.out.println(String.format("Offset: 0x%X (%d bytes)", file.getOffset(), file.getOffset()));
+            System.out.println(String.format("Taille: %d bytes", file.getSize()));
+            System.out.println(String.format("Destination: %s", outputFile.getAbsolutePath()));
 
             while (bytesRead < bytesToRead) {
                 buffer.clear();
@@ -95,16 +103,32 @@ public class RealRecoveryService {
                     buffer.limit((int)(bytesToRead - bytesRead));
                 }
 
+                // LECTURE RÉELLE DES SECTEURS DU DISQUE
                 int read = sourceChannel.read(buffer);
-                if (read == -1) break;
+                if (read == -1) {
+                    System.out.println("⚠ Fin de lecture prématurée");
+                    break;
+                }
 
+                // ÉCRITURE DES VRAIES DONNÉES dans le fichier de sortie
                 buffer.flip();
-                outputChannel.write(buffer);
+                int written = outputChannel.write(buffer);
                 bytesRead += read;
+
+                if (bytesRead % (1024 * 1024) == 0) {
+                    System.out.println(String.format("  Progress: %d MB / %d MB",
+                            bytesRead / (1024 * 1024),
+                            bytesToRead / (1024 * 1024)));
+                }
             }
 
+            boolean success = bytesRead == bytesToRead;
+            System.out.println(String.format("✓ Récupération %s: %d bytes écrits",
+                    success ? "RÉUSSIE" : "PARTIELLE", bytesRead));
+            System.out.println("==========================");
+
             // Vérifier si on a bien récupéré toute la taille attendue
-            return bytesRead == bytesToRead;
+            return success;
         }
     }
 

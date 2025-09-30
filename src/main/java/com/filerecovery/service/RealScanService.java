@@ -27,9 +27,11 @@ public class RealScanService extends ScanService {
             long deviceSize = 0;
 
             // Sous Windows, channel.size() ne fonctionne pas sur les PHYSICALDRIVE
+            // On utilise la taille fournie par le BlockDevice
             try {
                 deviceSize = channel.size();
             } catch (IOException e) {
+                // Windows PHYSICALDRIVE - utiliser la taille du BlockDevice
                 deviceSize = device.getSize();
                 notifyProgress(3, "Note: Utilisation de la taille déclarée du périphérique");
             }
@@ -39,108 +41,102 @@ public class RealScanService extends ScanService {
             }
 
             if (deviceSize == 0) {
-                throw new IOException("Impossible de déterminer la taille du périphérique");
+                throw new IOException("Impossible de déterminer la taille du périphérique. " +
+                        "Vérifiez que vous avez les droits administrateur.");
             }
 
-            notifyProgress(5, "✓ Accès direct réussi - Taille totale: " + formatSize(deviceSize));
-
-            // Augmenter la limite de scan ou scanner tout le disque
-            long maxScan = Math.min(deviceSize, 10L * 1024 * 1024 * 1024); // 10GB au lieu de 500MB
-            notifyProgress(6, "Zone de scan: " + formatSize(maxScan));
-            notifyProgress(7, "🔍 Recherche de signatures de fichiers...");
+            notifyProgress(5, "✓ Accès direct réussi - Taille: " + formatSize(deviceSize));
+            notifyProgress(6, "🔍 Recherche de signatures de fichiers...");
+            notifyProgress(7, "📏 Détection de taille RÉELLE activée");
 
             ByteBuffer buffer = ByteBuffer.allocate(1024 * 1024); // 1MB buffer
             long position = 0;
-            int sectorsScanned = 0;
+            // Scanner jusqu'à 5GB ou toute la taille du disque si plus petit
+            long maxScan = Math.min(deviceSize, 5L * 1024 * 1024 * 1024); // 5GB max
 
-            notifyProgress(10, "Début du scan RAW réel...");
+            notifyProgress(10, String.format("Début du scan RAW réel... (Scan: %s sur %s)",
+                    formatSize(maxScan), formatSize(deviceSize)));
 
-            while (position < maxScan) {
+            // Index des positions déjà utilisées
+            Set<Long> usedPositions = new HashSet<>();
+
+            int sectorsRead = 0;
+
+            while (position < deviceSize && position < maxScan) {
                 try {
                     channel.position(position);
                     buffer.clear();
                     int bytesRead = channel.read(buffer);
 
-                    if (bytesRead <= 0) break;
+                    if (bytesRead <= 0) {
+                        notifyProgress(10 + (int)((position * 80) / maxScan),
+                                "⚠ Fin de lecture prématurée à " + formatSize(position));
+                        break;
+                    }
 
+                    sectorsRead++;
                     buffer.flip();
                     byte[] data = new byte[bytesRead];
                     buffer.get(data);
 
-                    // Rechercher les signatures (VERSION SIMPLIFIÉE)
-                    List<FileInfo> foundFiles = findFilesSimple(data, position);
+                    // Rechercher les signatures avec TAILLE RÉELLE
+                    List<FileInfo> foundFiles = findFilesWithSize(data, position, channel, usedPositions);
 
-                    for (FileInfo fileInfo : foundFiles) {
-                        RecoveredFile file = new RecoveredFile(
-                                fileInfo.name,
-                                device.getPath() + " @ offset " + fileInfo.offset,
-                                fileInfo.size,
-                                fileInfo.type,
-                                RecoveredFile.FileState.RECOVERABLE,
-                                fileInfo.offset
-                        );
+                    if (!foundFiles.isEmpty()) {
+                        for (FileInfo fileInfo : foundFiles) {
+                            RecoveredFile file = new RecoveredFile(
+                                    fileInfo.name,
+                                    device.getPath() + " @ offset " + fileInfo.offset,
+                                    fileInfo.size,
+                                    fileInfo.type,
+                                    RecoveredFile.FileState.RECOVERABLE,
+                                    fileInfo.offset
+                            );
 
-                        files.add(file);
-                        notifyFileFound(file);
-                        notifyProgress(10 + (int)((position * 80) / maxScan),
-                                String.format("✓ %s trouvé @ %s", fileInfo.type, formatSize(position)));
+                            files.add(file);
+                            notifyFileFound(file);
+                            notifyProgress(10 + (int)((position * 80) / maxScan),
+                                    String.format("✓ Trouvé: %s - Taille: %s @ %s",
+                                            fileInfo.type, formatSize(fileInfo.size), formatSize(position)));
+
+                            // Marquer la plage comme utilisée
+                            usedPositions.add(fileInfo.offset);
+                        }
                     }
 
                     position += bytesRead;
-                    sectorsScanned++;
 
-                    // Log tous les 100 secteurs (100MB)
-                    if (sectorsScanned % 100 == 0) {
+                    // Log tous les 100MB
+                    if (sectorsRead % 100 == 0) {
                         int progress = 10 + (int)((position * 80) / maxScan);
-                        notifyProgress(progress, String.format("Scanné: %s / %s - %d fichiers",
+                        notifyProgress(progress, String.format("Scanné: %s / %s - %d fichiers trouvés",
                                 formatSize(position), formatSize(maxScan), files.size()));
                     }
                 } catch (IOException e) {
-                    // Secteur illisible, continuer
-                    position += 1024 * 1024;
+                    // Si erreur de lecture à cette position, continuer
+                    notifyProgress(10 + (int)((position * 80) / maxScan),
+                            "⚠ Secteur illisible à " + formatSize(position) + " - Continue...");
+                    position += 1024 * 1024; // Sauter 1MB
                 }
             }
 
-            notifyProgress(100, "✓ Scan terminé");
+            notifyProgress(95, String.format("Scan terminé - %d secteurs lus, %d fichiers trouvés",
+                    sectorsRead, files.size()));
+            notifyProgress(100, "✓ Scan RÉEL terminé - Toutes les tailles sont réelles");
+
+            if (files.isEmpty()) {
+                notifyProgress(100, "ℹ Aucun fichier trouvé. Causes possibles:");
+                notifyProgress(100, "  - Disque vierge ou déjà écrasé");
+                notifyProgress(100, "  - Fichiers fragmentés (non supporté)");
+                notifyProgress(100, "  - Système de fichiers chiffré");
+                notifyProgress(100, "  - Scanner une zone plus grande (actuellement: " + formatSize(maxScan) + ")");
+            }
+
             notifyComplete(files.size());
         } catch (IOException e) {
-            notifyError("✗ Erreur: " + e.getMessage());
+            notifyError("✗ Erreur accès direct: " + e.getMessage());
+            notifyError("Conseil: Vérifiez les permissions (sudo/admin) et que le disque est démonté");
             throw e;
-        }
-
-        return files;
-    }
-
-    /**
-     * Version simplifiée qui trouve juste les signatures (pas de calcul de taille complexe)
-     */
-    private List<FileInfo> findFilesSimple(byte[] data, long baseOffset) {
-        List<FileInfo> files = new ArrayList<>();
-
-        Map<String, FileSignatureInfo> signatures = getSignatures();
-
-        for (int offset = 0; offset < data.length - 8; offset++) {
-            for (Map.Entry<String, FileSignatureInfo> entry : signatures.entrySet()) {
-                String type = entry.getKey();
-                FileSignatureInfo sigInfo = entry.getValue();
-
-                if (matchesSignature(data, offset, sigInfo.startSignature)) {
-                    long globalOffset = baseOffset + offset;
-
-                    // Utiliser une taille estimée simple
-                    long estimatedSize = sigInfo.avgSize;
-
-                    String fileName = String.format("%s_recovered_%08X.%s",
-                            type.toLowerCase(),
-                            (int)(globalOffset & 0xFFFFFFFF),
-                            sigInfo.extension);
-
-                    files.add(new FileInfo(fileName, globalOffset, estimatedSize, type));
-
-                    // Éviter de trouver le même fichier plusieurs fois
-                    offset += sigInfo.startSignature.length;
-                }
-            }
         }
 
         return files;
@@ -193,6 +189,7 @@ public class RealScanService extends ScanService {
 
     /**
      * Détermine la taille réelle d'un fichier en cherchant son marqueur de fin
+     * ET vérifie que les données entre le début et la fin sont cohérentes
      */
     private long determineFileSize(FileChannel channel, long startOffset,
                                    FileSignatureInfo sigInfo) throws IOException {
@@ -209,30 +206,66 @@ public class RealScanService extends ScanService {
         long maxSize = 100 * 1024 * 1024; // 100MB max par fichier
         long bytesRead = 0;
 
+        // Compteur pour détecter des patterns suspects (fichier écrasé)
+        int zeroBlocks = 0;
+        int randomBlocks = 0;
+        int totalBlocks = 0;
+
         while (bytesRead < maxSize) {
-            channel.position(currentPos);
-            buffer.clear();
-            int read = channel.read(buffer);
+            try {
+                channel.position(currentPos);
+                buffer.clear();
+                int read = channel.read(buffer);
 
-            if (read == -1) break;
+                if (read == -1) break;
 
-            buffer.flip();
+                buffer.flip();
 
-            for (int i = 0; i < read; i++) {
-                byte b = buffer.get();
-                searchBuffer[searchPos] = b;
-                searchPos = (searchPos + 1) % sigInfo.endSignature.length;
-                bytesRead++;
+                // Analyser la qualité des données
+                boolean isZeroBlock = true;
+                boolean isRandomBlock = true;
+                byte firstByte = 0;
 
-                if (matchesEndSignature(searchBuffer, searchPos, sigInfo.endSignature)) {
-                    return bytesRead + sigInfo.startSignature.length;
+                for (int i = 0; i < read; i++) {
+                    byte b = buffer.get(i);
+
+                    if (i == 0) firstByte = b;
+
+                    if (b != 0) isZeroBlock = false;
+                    if (b == firstByte || b == 0) isRandomBlock = false;
+
+                    // Rechercher le marqueur de fin
+                    searchBuffer[searchPos] = b;
+                    searchPos = (searchPos + 1) % sigInfo.endSignature.length;
+
+                    if (matchesEndSignature(searchBuffer, searchPos, sigInfo.endSignature)) {
+                        // Vérifier la qualité du fichier trouvé
+                        double zeroRatio = (double) zeroBlocks / totalBlocks;
+
+                        if (zeroRatio > 0.8) {
+                            // Plus de 80% de blocs vides = fichier probablement écrasé
+                            return 0;
+                        }
+
+                        return bytesRead + i + 1; // Taille réelle incluant le marqueur
+                    }
                 }
-            }
 
-            currentPos += read;
+                // Statistiques de qualité
+                totalBlocks++;
+                if (isZeroBlock) zeroBlocks++;
+                if (isRandomBlock) randomBlocks++;
+
+                bytesRead += read;
+                currentPos += read;
+
+            } catch (IOException e) {
+                // Secteur illisible = fichier probablement fragmenté ou endommagé
+                return 0;
+            }
         }
 
-        // Marqueur de fin non trouvé, retourner 0 (fichier probablement corrompu)
+        // Marqueur de fin non trouvé après 100MB = fichier corrompu
         return 0;
     }
 
