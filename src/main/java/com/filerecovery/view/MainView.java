@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * Interface de la vue principale
+ * Interface de la vue principale avec support Pause/Resume
  * Définit les méthodes que la vue doit implémenter
  */
 public interface MainView {
@@ -61,6 +61,26 @@ public interface MainView {
     void setScanningState(boolean scanning);
 
     /**
+     * Active/désactive le bouton pause/resume
+     */
+    void setPauseResumeEnabled(boolean enabled);
+
+    /**
+     * Active/désactive le bouton stop
+     */
+    void setStopEnabled(boolean enabled);
+
+    /**
+     * Change le texte du bouton pause/resume
+     */
+    void setPauseResumeButtonText(String text);
+
+    /**
+     * Active/désactive le bouton de récupération sélective
+     */
+    void setRecoverSelectedEnabled(boolean enabled);
+
+    /**
      * Demande confirmation pour le scan
      */
     boolean confirmScan(BlockDevice device);
@@ -74,6 +94,8 @@ public interface MainView {
     void onRefreshDevices(Runnable callback);
     void onDeviceSelected(Consumer<BlockDevice> callback);
     void onStartScan(Consumer<Boolean> callback); // Boolean = rawMode
+    void onPauseResume(Runnable callback); // NOUVEAU
+    void onStopScan(Runnable callback); // NOUVEAU
     void onUnmountDevice(Runnable callback);
     void onRecoverFiles(RecoverFilesCallback callback);
 

@@ -181,7 +181,7 @@ public class ScanService {
         return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
     }
 
-    protected void notifyProgress(int percentage, String message) {
+    public void notifyProgress(int percentage, String message) {
         if (progressListener != null) {
             progressListener.onProgress(percentage, message);
         }

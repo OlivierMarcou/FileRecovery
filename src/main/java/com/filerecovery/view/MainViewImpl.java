@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * Implémentation Swing de la vue principale
+ * Implémentation Swing de la vue principale avec Pause/Resume
  */
 public class MainViewImpl extends JFrame implements MainView {
 
@@ -25,12 +25,15 @@ public class MainViewImpl extends JFrame implements MainView {
     private JLabel previewLabel;
     private JProgressBar progressBar;
     private JButton scanButton, recoverButton, unmountButton, refreshButton;
+    private JButton pauseResumeButton, stopButton; // NOUVEAUX BOUTONS
     private JCheckBox rawAccessCheckbox;
 
     // Callbacks vers le contrôleur
     private Runnable refreshCallback;
     private Consumer<BlockDevice> deviceSelectedCallback;
     private Consumer<Boolean> startScanCallback;
+    private Runnable pauseResumeCallback; // NOUVEAU
+    private Runnable stopScanCallback; // NOUVEAU
     private Runnable unmountCallback;
     private RecoverFilesCallback recoverCallback;
 
@@ -38,7 +41,7 @@ public class MainViewImpl extends JFrame implements MainView {
     private Map<String, DefaultMutableTreeNode> categoryNodes;
 
     public MainViewImpl() {
-        super("Outil de Récupération de Fichiers - Architecture MVC");
+        super("Outil de Récupération de Fichiers - Architecture MVC + Pause/Resume");
         this.categoryNodes = new HashMap<>();
     }
 
@@ -72,7 +75,7 @@ public class MainViewImpl extends JFrame implements MainView {
 
         JLabel label = new JLabel("Périphérique:");
         deviceSelector = new JComboBox<>();
-        deviceSelector.setPreferredSize(new Dimension(450, 30));
+        deviceSelector.setPreferredSize(new Dimension(400, 30));
         deviceSelector.addActionListener(e -> {
             BlockDevice selected = (BlockDevice) deviceSelector.getSelectedItem();
             if (selected != null && deviceSelectedCallback != null) {
@@ -80,8 +83,8 @@ public class MainViewImpl extends JFrame implements MainView {
             }
         });
 
-        scanButton = new JButton("Scanner le périphérique");
-        scanButton.setPreferredSize(new Dimension(180, 30));
+        scanButton = new JButton("▶ Scanner");
+        scanButton.setPreferredSize(new Dimension(150, 30));
         scanButton.addActionListener(e -> {
             if (startScanCallback != null) {
                 boolean rawMode = rawAccessCheckbox != null && rawAccessCheckbox.isSelected();
@@ -89,15 +92,36 @@ public class MainViewImpl extends JFrame implements MainView {
             }
         });
 
+        // NOUVEAU: Bouton Pause/Resume
+        pauseResumeButton = new JButton("⏸ Pause");
+        pauseResumeButton.setPreferredSize(new Dimension(120, 30));
+        pauseResumeButton.setEnabled(false);
+        pauseResumeButton.addActionListener(e -> {
+            if (pauseResumeCallback != null) {
+                pauseResumeCallback.run();
+            }
+        });
+
+        // NOUVEAU: Bouton Stop
+        stopButton = new JButton("⏹ Arrêter");
+        stopButton.setPreferredSize(new Dimension(120, 30));
+        stopButton.setEnabled(false);
+        stopButton.addActionListener(e -> {
+            if (stopScanCallback != null) {
+                stopScanCallback.run();
+            }
+        });
+
         unmountButton = new JButton(isWindows ? "Éjecter" : "Démonter");
-        unmountButton.setPreferredSize(new Dimension(150, 30));
+        unmountButton.setPreferredSize(new Dimension(120, 30));
         unmountButton.addActionListener(e -> {
             if (unmountCallback != null) {
                 unmountCallback.run();
             }
         });
 
-        refreshButton = new JButton("⟳ Rafraîchir");
+        refreshButton = new JButton("⟳");
+        refreshButton.setPreferredSize(new Dimension(50, 30));
         refreshButton.addActionListener(e -> {
             if (refreshCallback != null) {
                 refreshCallback.run();
@@ -108,10 +132,12 @@ public class MainViewImpl extends JFrame implements MainView {
         controlPanel.add(deviceSelector);
         controlPanel.add(unmountButton);
         controlPanel.add(scanButton);
+        controlPanel.add(pauseResumeButton); // AJOUTÉ
+        controlPanel.add(stopButton); // AJOUTÉ
         controlPanel.add(refreshButton);
 
         if (!isWindows) {
-            rawAccessCheckbox = new JCheckBox("Accès direct (root requis)", true);
+            rawAccessCheckbox = new JCheckBox("Accès direct", true);
             rawAccessCheckbox.setToolTipText("Mode file carving - Linux uniquement");
             controlPanel.add(rawAccessCheckbox);
         }
@@ -172,7 +198,7 @@ public class MainViewImpl extends JFrame implements MainView {
         progressBar.setStringPainted(true);
         progressPanel.add(progressBar, BorderLayout.CENTER);
 
-        recoverButton = new JButton("Récupérer la sélection");
+        recoverButton = new JButton("💾 Récupérer la sélection");
         recoverButton.setEnabled(false);
         recoverButton.addActionListener(e -> recoverSelectedFiles());
         progressPanel.add(recoverButton, BorderLayout.EAST);
@@ -374,8 +400,37 @@ public class MainViewImpl extends JFrame implements MainView {
     public void setScanningState(boolean scanning) {
         SwingUtilities.invokeLater(() -> {
             scanButton.setEnabled(!scanning);
-            recoverButton.setEnabled(!scanning);
             deviceSelector.setEnabled(!scanning);
+            unmountButton.setEnabled(!scanning);
+            refreshButton.setEnabled(!scanning);
+        });
+    }
+
+    @Override
+    public void setPauseResumeEnabled(boolean enabled) {
+        SwingUtilities.invokeLater(() -> {
+            pauseResumeButton.setEnabled(enabled);
+        });
+    }
+
+    @Override
+    public void setStopEnabled(boolean enabled) {
+        SwingUtilities.invokeLater(() -> {
+            stopButton.setEnabled(enabled);
+        });
+    }
+
+    @Override
+    public void setPauseResumeButtonText(String text) {
+        SwingUtilities.invokeLater(() -> {
+            pauseResumeButton.setText(text);
+        });
+    }
+
+    @Override
+    public void setRecoverSelectedEnabled(boolean enabled) {
+        SwingUtilities.invokeLater(() -> {
+            recoverButton.setEnabled(enabled);
         });
     }
 
@@ -426,6 +481,16 @@ public class MainViewImpl extends JFrame implements MainView {
     @Override
     public void onStartScan(Consumer<Boolean> callback) {
         this.startScanCallback = callback;
+    }
+
+    @Override
+    public void onPauseResume(Runnable callback) {
+        this.pauseResumeCallback = callback;
+    }
+
+    @Override
+    public void onStopScan(Runnable callback) {
+        this.stopScanCallback = callback;
     }
 
     @Override
